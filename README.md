@@ -1,17 +1,17 @@
 # go-shortener
 
-A self-hosted link shortener with click analytics and QR codes, built to replace Bitly. It runs on Cloudflare Workers with KV and D1, on your own domain, within the free plan.
+A self-hosted link shortener with click analytics and QR codes, built to replace Bitly. It runs on Cloudflare Workers with KV and D1, on your own domain, within the free plan, **without moving your company domain's DNS to Cloudflare**.
 
-- `https://go.mydomain.com/{slug}` → 302 to the destination. The lookup is a single KV read. The click is written to D1 inside `ctx.waitUntil`, so the redirect never waits on the database.
+- `https://go.ra-smarthealth.com/{slug}` → 302 to the destination. The lookup is a single KV read. The click is written to D1 inside `ctx.waitUntil`, so the redirect never waits on the database.
 - Slugs are random 6-character base62 by default, or a custom back-half. If you create a slug that already exists, you get a **409 error and nothing is overwritten**.
 - Each click logs: slug, timestamp, country and city (`request.cf`), device type (from the User-Agent), referer and outcome. **No IP address is stored.**
-- `https://go.mydomain.com/qr/{slug}` returns a PNG QR code of the short link (`?size=256|512|1024`, default 512), cached at the edge.
+- `https://go.ra-smarthealth.com/qr/{slug}` returns a PNG QR code of the short link (`?size=256|512|1024`, default 512), cached at the edge.
 - Optional expiry and click cap per link. Once either is reached, visitors get a 302 to a fallback URL instead of an error.
 - `/admin`, behind one password: create and delete links, clicks per day for each link, and a detail page per link with top countries, cities, referers and device split.
 - No accounts, no third-party scripts, analytics or telemetry. The admin page loads nothing from other origins and sends a strict CSP.
 
 > [!WARNING]
-> **These links die with the domain.** Every short link and every printed QR code points at `go.mydomain.com`. If the domain lapses, gets transferred, or its DNS moves off Cloudflare, every link you have ever handed out or printed breaks, and whoever registers the domain next can redirect your printed codes anywhere. Use a domain you intend to keep renewing for as long as the printed material exists, turn on auto-renew, and lock the domain at your registrar.
+> **These links die with either domain.** Every short link and every printed QR code points at `go.ra-smarthealth.com`, which is served through the helper domain `ra-smarthealth-links.com`. If **either** domain lapses or is transferred, every link you have ever handed out or printed breaks, and whoever registers the lapsed domain next can redirect your printed codes anywhere. Keep both on auto-renew for as long as the printed material exists, and lock them at the registrar. Nobody sees the helper domain, which makes it easy to forget: its name says what it is for on purpose.
 
 ## How it works
 
@@ -30,7 +30,25 @@ GET /{slug} ──► KV.get(slug) ──► 302 Location: …       (response s
 
 ## Setup
 
-You need a Cloudflare account and the domain added as a zone in Cloudflare, with its nameservers pointed at Cloudflare. Node 20+.
+### Why there are two domains
+
+The free plan only connects a Worker to a hostname if Cloudflare is the authoritative DNS for the whole domain ("full setup"). Proxying a single subdomain while the rest of the DNS stays elsewhere needs the Business plan ([zone setups](https://developers.cloudflare.com/dns/zone-setups), [partial setup](https://developers.cloudflare.com/dns/zone-setups/partial-setup/index.md)).
+
+`ra-smarthealth.com` holds the company website, email, n8n, Vikunja and several GitHub Pages sites, all on Wix DNS. Moving it to serve a link shortener isn't worth the risk. Instead:
+
+- **`ra-smarthealth-links.com`** is a helper domain registered at Cloudflare. It is empty and nobody sees it.
+- **[Cloudflare for SaaS](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/)** on that zone lets another domain's hostname point at it with a CNAME. 100 custom hostnames are included on the Free plan.
+- **`go.ra-smarthealth.com`** is added as a custom hostname. In Wix you **add** a CNAME (and the verification records Cloudflare asks for); no existing record changes.
+- The Worker is attached to the helper zone with the route `*/*`, which catches custom-hostname traffic ([Worker as origin](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin)).
+
+```
+visitor → go.ra-smarthealth.com ──CNAME (Wix)──► fallback.ra-smarthealth-links.com
+                                                    │ Cloudflare for SaaS
+                                                    ▼
+                                         Worker (route */* on the helper zone)
+```
+
+You need Node 20+ and:
 
 ```bash
 npm install
@@ -63,13 +81,7 @@ Then create the tables:
 npm run db:migrate          # wrangler d1 migrations apply go-shortener --remote
 ```
 
-### 2. Set your domain
-
-In `wrangler.toml`, replace `go.mydomain.com` in both places: the `routes` pattern and `BASE_URL`. `BASE_URL` is what the QR codes encode, so set it before you print anything.
-
-Optionally set `DEFAULT_FALLBACK_URL` (for example your homepage). Links with an expiry or a cap then don't each need their own fallback.
-
-### 3. Set the admin password (secret, never in `wrangler.toml`)
+### 2. Set the admin password (secret, never in `wrangler.toml`)
 
 ```bash
 npx wrangler secret put ADMIN_PASSWORD
@@ -77,30 +89,42 @@ npx wrangler secret put ADMIN_PASSWORD
 
 Use a long random password (20+ characters). There is no lockout after failed attempts (see [Security notes](#security-notes)). Changing the secret logs out every existing session.
 
-### 4. DNS record
+Optionally set `DEFAULT_FALLBACK_URL` in `wrangler.toml` (for example the company homepage). Links with an expiry or a cap then don't each need their own fallback.
 
-`wrangler.toml` declares the hostname as a **Custom Domain**:
-
-```toml
-routes = [{ pattern = "go.mydomain.com", custom_domain = true }]
-```
-
-When the zone is on Cloudflare, `wrangler deploy` creates the `go` DNS record and its certificate for you. **Don't create the record by hand first.** If a `go` record already exists, delete it first: attaching the Custom Domain fails when the hostname already has a DNS record.
-
-If you'd rather use a classic route instead of a Custom Domain:
-
-1. In the Cloudflare dashboard → DNS, add a proxied (orange-cloud) record `AAAA go 100::`. `100::` is a discard-prefix placeholder: the Worker answers before the request would go anywhere.
-2. Change the route to `{ pattern = "go.mydomain.com/*", zone_name = "mydomain.com" }`.
-
-`workers_dev = false` keeps the Worker off `*.workers.dev`, so links only exist on your domain.
-
-### 5. Deploy
+### 3. Deploy the Worker
 
 ```bash
 npm run deploy
 ```
 
-Open `https://go.mydomain.com/admin`, sign in, and create a link.
+This attaches the Worker to `ra-smarthealth-links.com` with the route `*/*`. Nothing is reachable at `go.ra-smarthealth.com` yet.
+
+### 4. Fallback origin on the helper zone (Cloudflare dashboard)
+
+1. **ra-smarthealth-links.com → DNS → Records → Add record**: type `AAAA`, name `fallback`, IPv6 `100::`, **Proxied** (orange cloud). `100::` is a placeholder: the Worker answers before traffic would go anywhere.
+2. **SSL/TLS → Custom Hostnames**: enable Cloudflare for SaaS if asked, and set the **fallback origin** to `fallback.ra-smarthealth-links.com`. Wait until it shows as active.
+
+### 5. Add `go.ra-smarthealth.com` as a custom hostname
+
+1. Still in **SSL/TLS → Custom Hostnames → Add custom hostname**: enter `go.ra-smarthealth.com` and keep the default certificate options.
+2. Cloudflare then lists the records it needs at the domain's DNS provider. Expect a CNAME and one or two TXT records (hostname ownership and certificate validation). Copy them exactly.
+
+### 6. Add the records in Wix
+
+In **Wix → Domains → ra-smarthealth.com → Manage DNS records**, **add**:
+
+| Type | Host | Value |
+|---|---|---|
+| CNAME | `go` | `fallback.ra-smarthealth-links.com` |
+| TXT | as shown by Cloudflare | as shown by Cloudflare |
+
+Do not edit or delete any existing record. Back in Cloudflare, the custom hostname and its certificate should turn **Active**; that can take minutes to a few hours.
+
+### 7. Use it
+
+Open `https://go.ra-smarthealth.com/admin`, sign in, and create a link.
+
+`workers_dev = false` keeps the Worker off `*.workers.dev`. Requests to `ra-smarthealth-links.com` itself also reach the Worker; that is harmless (it only knows slugs, `/qr/` and `/admin`), and the QR codes always encode `BASE_URL`.
 
 ### Local development
 

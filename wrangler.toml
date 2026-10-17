@@ -6,8 +6,12 @@ compatibility_flags = ["nodejs_compat"]
 
 # Only serve on your own domain, never on *.workers.dev.
 workers_dev = false
+# go.ra-smarthealth.com stays on its existing DNS provider (Wix) and reaches
+# this Worker as a Cloudflare for SaaS custom hostname of the helper zone
+# ra-smarthealth-links.com. "*/*" catches every hostname entering that zone,
+# custom hostnames included. See README → Setup.
 routes = [
-  { pattern = "go.ra-smarthealth.com", custom_domain = true },
+  { pattern = "*/*", zone_name = "ra-smarthealth-links.com" },
 ]
 
 [vars]
