@@ -1,0 +1,33 @@
+name = "go-shortener"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+# qrcode -> pngjs needs Node's zlib/stream/buffer APIs.
+compatibility_flags = ["nodejs_compat"]
+
+# Only serve on your own domain, never on *.workers.dev.
+workers_dev = false
+routes = [
+  { pattern = "go.mydomain.com", custom_domain = true },
+]
+
+[vars]
+# Public origin encoded in QR codes and shown in the admin UI. No trailing slash.
+BASE_URL = "https://go.mydomain.com"
+# Used when an expired / capped link has no fallback of its own. Leave empty
+# to require a per-link fallback whenever expiry or a cap is set.
+DEFAULT_FALLBACK_URL = ""
+
+# Slug -> link record. Hot path for every redirect.
+[[kv_namespaces]]
+binding = "LINKS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Link registry (source of truth, enforces unique slugs) + click log.
+[[d1_databases]]
+binding = "DB"
+database_name = "go-shortener"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# ADMIN_PASSWORD is a secret: `npx wrangler secret put ADMIN_PASSWORD`.
+# Never put it in this file.

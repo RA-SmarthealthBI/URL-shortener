@@ -1,0 +1,2 @@
+# Copy to .dev.vars for `wrangler dev` only. Never commit .dev.vars.
+ADMIN_PASSWORD=change-me-to-a-long-random-string
