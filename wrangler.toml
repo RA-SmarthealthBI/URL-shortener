@@ -7,12 +7,12 @@ compatibility_flags = ["nodejs_compat"]
 # Only serve on your own domain, never on *.workers.dev.
 workers_dev = false
 routes = [
-  { pattern = "go.mydomain.com", custom_domain = true },
+  { pattern = "go.ra-smarthealth.com", custom_domain = true },
 ]
 
 [vars]
 # Public origin encoded in QR codes and shown in the admin UI. No trailing slash.
-BASE_URL = "https://go.mydomain.com"
+BASE_URL = "https://go.ra-smarthealth.com"
 # Used when an expired / capped link has no fallback of its own. Leave empty
 # to require a per-link fallback whenever expiry or a cap is set.
 DEFAULT_FALLBACK_URL = ""
